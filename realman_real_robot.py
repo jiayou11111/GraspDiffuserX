@@ -465,6 +465,3 @@ def main(checkpoint, device):
 
 if __name__ == "__main__":
     main()
-
-
-# python realman_real_robot.py -i data/outputs/latest.ckpt

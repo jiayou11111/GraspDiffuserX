@@ -1,7 +1,4 @@
 import sys
-sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
-
 import torch
 import dill
 import hydra
@@ -13,112 +10,146 @@ import torch
 import os
 import numpy as np
 from PIL import Image
-
+import shutil
 
 @click.command()
 @click.option('-c', '--checkpoint', required=True)
 @click.option('-d', '--device', default='cuda:0')
-
-
 def main(checkpoint, device):
 
-    #  load checkpoint & workspace
+    # 1. Load checkpoint & config
+    # 使用 dill 加载 pickle 文件，确保能加载 lambda 函数等复杂结构
     payload = torch.load(checkpoint, pickle_module=dill)
     cfg = payload['cfg']
 
-    cls = hydra.utils.get_class(cfg._target_)
-    workspace: BaseWorkspace = cls(cfg, output_dir=None)
-    workspace.load_payload(payload)
-
-    # get policy
-    policy = workspace.model
-    if cfg.training.use_ema:
-        policy = workspace.ema_model
-
-    device = torch.device(device)
-    policy.to(device)
-    policy.eval()
-
-    # build EXACT SAME dataset as training
+    # 2. Build dataset
+    # 实例化数据集主要是为了获取底层的 replay_buffer
     dataset: BaseImageDataset = hydra.utils.instantiate(cfg.task.dataset)
-    normalizer = dataset.get_normalizer()
-    policy.set_normalizer(normalizer)
-
-
-    # take FIRST sample (第一条数据，第一个片段)
-
-    sample = get_sample(dataset, demo_id=5, timestep=1)
-    obs = sample["obs"]
-
-    obs = {
-        k: v.unsqueeze(0).float().to(device)  
-        for k, v in obs.items()
-    }
-    save_obs_images(obs, out_dir="debug_obs")
-
-    print("\n===== OBS =====")
-    for k, v in obs.items():
-        print(f"{k}: {tuple(v.shape)}")
-
-    # 5. run policy
-    with torch.no_grad():
-        result = policy.predict_action(obs)
-        pre_action = result["action_pred"]
-        
-
-    print("\n===== FIRST PRE_ACTION (t=0) =====")
-    print(pre_action)
-
-
-    action_deg = pre_action[0] * 180.0 / torch.pi
-    print(action_deg)
-
-def get_sample(dataset, demo_id, timestep):
     rb = dataset.replay_buffer
-    episode_ends = rb.episode_ends
 
+    # 3. Random Sample a Demo
+    # 随机选择一个演示片段
+    n_demos = len(rb.episode_ends)
+    demo_id = np.random.randint(0, n_demos)
+    
+    print("=" * 60)
+    print(f"随机选择的 Demo ID: {demo_id} (总共 {n_demos} 个)")
+    print("=" * 60)
 
-    assert demo_id < len(episode_ends)
+    # 计算该 Demo 在 ReplayBuffer 中的绝对起止索引
+    start_idx = 0 if demo_id == 0 else rb.episode_ends[demo_id - 1]
+    end_idx = rb.episode_ends[demo_id]
+    demo_len = end_idx - start_idx
+    
+    print(f"Demo Length: {demo_len} frames")
+    print(f"Buffer Global Range: [{start_idx}, {end_idx})")
 
-    start = 0 if demo_id == 0 else episode_ends[demo_id - 1]
-    end = episode_ends[demo_id]
+    # 准备保存图片的文件夹
+    save_dir = os.path.join("save_img", f"demo_{demo_id}")
+    if os.path.exists(save_dir):
+        shutil.rmtree(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
+    print(f"\n[Info] 图片将保存在: {save_dir}")
 
-    length = end - start
-    assert timestep < length, f"timestep {timestep} >= demo length {length}"
+    # -------------------------------------------------------------
+    # 4. 处理 Demo 的所有帧观测数据 (Observation)
+    # -------------------------------------------------------------
+    print(f"\n[Demo {demo_id} 观测数据 (Observation)]")
+    
+    # 获取需要观测的 Key 列表 (从 Config 中读取)
+    obs_meta = cfg.task.dataset.shape_meta.obs
+    target_obs_keys = list(obs_meta.keys())
+    
+    # 建立 Key 到 ReplayBuffer 实际路径的映射
+    # 因为 RB 内可能存储为 "obs/image" 或直接 "image"
+    rb_key_map = {}
+    for k in target_obs_keys:
+        if k in rb.keys():
+            rb_key_map[k] = k
+        elif f"obs/{k}" in rb.keys():
+            rb_key_map[k] = f"obs/{k}"
+            
+    # 从 ReplayBuffer 切片获取数据 (Numpy backend)
+    # 这样获取的是最原始的、未经过 transform 的数据
+    demo_data = {}
+    for key_name, rb_key in rb_key_map.items():
+        demo_data[key_name] = rb[rb_key][start_idx:end_idx]
 
-    idx = start + timestep
-    return dataset[idx]
-
-def save_obs_images(obs, out_dir="debug_obs"):
-    """
-    保存送入 policy.predict_action(obs) 的所有时间帧图像
-    obs: dict, key -> tensor (B, T, 3, H, W)
-    """
-    os.makedirs(out_dir, exist_ok=True)
-
-    for k, v in obs.items():
-        # 只处理 RGB 图像
-        if v.ndim == 5 and v.shape[2] == 3:
-            # v: (B, T, 3, H, W)
-            B, T, _, H, W = v.shape
-
-            for t in range(T):
-                img = v[0, t].detach().cpu()  # (3, H, W)
-
-                # (3, H, W) -> (H, W, 3)
-                img = img.permute(1, 2, 0)
-
-                # 假设输入已经是 0~1（robomimic / diffusion_policy 默认）
-                img = img.clamp(0, 1)
-                img = (img * 255).byte().numpy()
+    # 遍历每一帧进行打印/保存
+    for i in range(demo_len):
+        global_idx = start_idx + i
+        print(f"\n>>> Frame {i} (Global Index: {global_idx}):")
+        
+        for key in target_obs_keys:
+            if key not in demo_data:
+                continue
                 
-                img = img[..., ::-1] #BGR格式
+            value = demo_data[key][i] # 取第 i 帧
+            
+            # --- 处理图像数据 ---
+            is_image = False
+            img_np = None
+            
+            # 判断逻辑：维度为3 且 (C=3 或 last_dim=3)
+            # ReplayBuffer 里的图片通常是 (C,H,W) 或 (H,W,C)
+            if value.ndim == 3:
+                c, h, w = value.shape
+                if c == 3: # (3, H, W) -> 转 (H, W, 3)
+                    img_np = np.transpose(value, (1, 2, 0))
+                    is_image = True
+                elif value.shape[2] == 3: # (H, W, 3)
+                    img_np = value
+                    is_image = True
+            
+            if is_image:
+                # 归一化处理：如果是 float [0,1]，转 uint8 [0,255]
+                if img_np.dtype == np.float32 or img_np.dtype == np.float64:
+                    # 裁减到合法范围
+                    img_np = np.clip(img_np, 0, 1)
+                    img_np = (img_np * 255).astype(np.uint8)
+                
+                # 保存图片
+                save_path = os.path.join(save_dir, f"frame_{i}_{key}.png")
+                Image.fromarray(img_np).save(save_path)
+                print(f"  {key}: [Image Saved] -> {save_path}")
+            
+            else:
+                # --- 处理低维数据 ---
+                # 展平数组
+                flat_list = np.array(value).flatten().tolist()
+                
+                # 单位转换：如果是关节角度 (qpos, joint)，弧度 -> 角度
+                if 'qpos' in key or 'joint' in key:
+                    val_strs = [f"{(x * 180.0 / np.pi):.4f}" for x in flat_list]
+                    unit_hint = "(Degree)"
+                else:
+                    val_strs = [f"{x:.4f}" for x in flat_list]
+                    unit_hint = ""
 
-                save_path = os.path.join(out_dir, f"{k}_t{t}.png")
-                Image.fromarray(img).save(save_path)
+                # 格式化打印: [val, val, val]
+                formatted_str = "[" + ", ".join(val_strs) + "]"
+                print(f"  {key} {unit_hint}: {formatted_str}")
 
-                print(f"[saved] {save_path}")
+    # -------------------------------------------------------------
+    # 5. 打印 Demo 的全部 Action (Ground Truth) - 转换为角度
+    # -------------------------------------------------------------
+    print(f"\n[Demo {demo_id} 全部 Action 数据 (Degree 角度, Ground Truth)]")
+    print(f"Total Steps: {demo_len}\n")
+
+    # 从 ReplayBuffer 获取 Action 切片
+    # 注意：ReplayBuffer 中的 Action 通常直接对齐到 Obs 的时间步
+    msg_action = rb['action'][start_idx:end_idx]
+
+    for t, action in enumerate(msg_action):
+        # 展平
+        action_flat = np.array(action).flatten()
+        
+        # 弧度 -> 角度
+        action_deg = action_flat * (180.0 / np.pi)
+        
+        # 格式化打印
+        action_str = ", ".join([f"{x:.4f}" for x in action_deg])
+        print(f"Step {t}: [{action_str}]")
 
 if __name__ == "__main__":
     main()
-# python eval_single_sample.py -c data/outputs/latest.ckpt -d cuda:0

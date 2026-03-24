@@ -179,6 +179,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         return result
     
     @torch.no_grad()
+    # 自动计算编码器输出维度
     def output_shape(self):
         example_obs_dict = dict()
         obs_shape_meta = self.shape_meta['obs']

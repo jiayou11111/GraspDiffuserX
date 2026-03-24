@@ -210,8 +210,8 @@ class RobomimicReplayImageDataset(BaseImageDataset):
             # convert uint8 image to float32
             obs_dict[key] = np.moveaxis(data[key][T_slice],-1,1
                 ).astype(np.float32) / 255.
-            # T,C,H,W
-            # del data[key]
+            
+            
             # # T,H,W,C -> T,C,H,W
             # img = np.moveaxis(data[key][T_slice], -1, 1).astype(np.float32) / 255.
 
@@ -219,6 +219,7 @@ class RobomimicReplayImageDataset(BaseImageDataset):
             # img = img[:, [2,1,0], :, :]
 
             # obs_dict[key] = img
+
             del data[key]
         for key in self.lowdim_keys:
             obs_dict[key] = data[key][T_slice].astype(np.float32)

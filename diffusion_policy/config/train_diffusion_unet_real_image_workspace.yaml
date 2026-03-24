@@ -1,63 +1,66 @@
 defaults:
   - _self_
-  - task: lift_image_abs
+  - task: real_pusht_image
 
-name: train_diffusion_transformer_hybrid
-_target_: diffusion_policy.workspace.train_diffusion_transformer_hybrid_workspace.TrainDiffusionTransformerHybridWorkspace
+name: train_diffusion_unet_image
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 horizon: 16
-n_obs_steps: 1
-# horizon: 10
-# n_obs_steps: 2
+n_obs_steps: 2
 n_action_steps: 8
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
 keypoint_visible_rate: 1.0
-obs_as_cond: True
+obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.diffusion_transformer_hybrid_image_policy.DiffusionTransformerHybridImagePolicy
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
 
   shape_meta: ${shape_meta}
   
   noise_scheduler:
-    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
     num_train_timesteps: 100
     beta_start: 0.0001
     beta_end: 0.02
+    # beta_schedule is important
+    # this is the best we found
     beta_schedule: squaredcos_cap_v2
-    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-    clip_sample: True # required when predict_epsilon=False
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
     prediction_type: epsilon # or sample
 
-  # vision backbone: 'bc_rnn' or 'dinov2_vits14', 'dinov2_vitb14', 'dinov2_vitl14', 'dinov2_vitg14'
-  # vision_backbone: 'dinov2_vits14' 
-  vision_backbone: 'bc_rnn'
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: null
+    resize_shape: [240, 320]
+    crop_shape: [216, 288] # ch, cw 240x320 90%
+    random_crop: True
+    use_group_norm: True
+    share_rgb_model: False
+    imagenet_norm: True
+
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
   num_inference_steps: 100
-
-  # crop_shape: [216, 288]
-  # crop_shape: [76, 76]
-  crop_shape: [224, 224]
-  obs_encoder_group_norm: True
-  eval_fixed_crop: True
-
-  n_layer: 8
-  n_cond_layers: 0  # >0: use transformer encoder for cond, otherwise use MLP
-  n_head: 4
-  n_emb: 256
-  p_drop_emb: 0.0
-  p_drop_attn: 0.3
-  causal_attn: True
-  time_as_cond: True # if false, use BERT like encoder only arch, time as input
-  obs_as_cond: ${obs_as_cond}
+  obs_as_global_cond: ${obs_as_global_cond}
+  # crop_shape: null
+  diffusion_step_embed_dim: 128
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
 
   # scheduler.step params
   # predict_epsilon: True
@@ -75,20 +78,21 @@ dataloader:
   num_workers: 8
   shuffle: True
   pin_memory: True
-  persistent_workers: False
+  persistent_workers: True
 
 val_dataloader:
   batch_size: 64
   num_workers: 8
   shuffle: False
   pin_memory: True
-  persistent_workers: False
+  persistent_workers: True
 
 optimizer:
-  transformer_weight_decay: 1.0e-3
-  obs_encoder_weight_decay: 1.0e-6
-  learning_rate: 1.0e-4
-  betas: [0.9, 0.95]
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
 
 training:
   device: "cuda:0"
@@ -97,13 +101,13 @@ training:
   resume: True
   # optimization
   lr_scheduler: cosine
-  # Transformer needs LR warmup
-  lr_warmup_steps: 1000
+  lr_warmup_steps: 500
   num_epochs: 600
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
   use_ema: True
+  freeze_encoder: False
   # training loop control
   # in epochs
   rollout_every: 50
@@ -127,13 +131,10 @@ logging:
 
 checkpoint:
   topk:
-    # monitor_key: test_mean_score
-    monitor_key: val_loss
-
-    mode: max
+    monitor_key: train_loss
+    mode: min
     k: 5
-    # format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
-    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
+    format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
 
