@@ -11,6 +11,9 @@ import os
 import numpy as np
 from PIL import Image
 import shutil
+from diffusion_policy.real_world.real_inference_util import get_real_obs_dict
+from diffusion_policy.common.pytorch_util import dict_apply
+import cv2
 
 @click.command()
 @click.option('-c', '--checkpoint', required=True)
@@ -145,11 +148,133 @@ def main(checkpoint, device):
         action_flat = np.array(action).flatten()
         
         # 弧度 -> 角度
-        action_deg = action_flat * (180.0 / np.pi)
+        # action_deg = action_flat * (180.0 / np.pi)
         
         # 格式化打印
-        action_str = ", ".join([f"{x:.4f}" for x in action_deg])
+        action_str = ", ".join([f"{x:.4f}" for x in action_flat])
         print(f"Step {t}: [{action_str}]")
+
+    # 6. 使用模型预测 Action 并打印 (Degree 角度, Predicted)
+    # -------------------------------------------------------------
+    print(f"\n[Demo {demo_id} 预测 Action 数据 (Degree 角度, Predicted)]")
+    print(f"Total Predicted Steps: {demo_len - cfg.policy.n_obs_steps}\n")
+
+    # 实例化 workspace 和 policy
+    cls = hydra.utils.get_class(cfg._target_)
+    workspace: BaseWorkspace = cls(cfg, output_dir=None)
+    workspace.load_payload(payload)
+
+    policy = workspace.model
+    if cfg.training.use_ema:
+        policy = workspace.ema_model
+    policy.to(device)
+    policy.eval()
+
+    # 准备观测数据用于预测 (滑动窗口预测每个动作)
+    n_obs_steps = cfg.policy.n_obs_steps
+    pred_actions = []
+
+    for i in range(n_obs_steps, demo_len):
+        # 构建 env_obs dict (使用前 n_obs_steps 帧观测预测第 i 帧的动作)
+        env_obs = {}
+        for key in target_obs_keys:
+            if key in demo_data:
+                env_obs[key] = demo_data[key][i - n_obs_steps:i]
+
+        obs_dict_np = get_real_obs_dict(
+            env_obs=env_obs,
+            shape_meta=cfg.task.shape_meta
+        )
+        obs_dict = dict_apply(
+            obs_dict_np,
+            lambda x: torch.from_numpy(x).unsqueeze(0).to(device)
+        )
+        print_obs_dict(obs_dict, "TORCH_OBS")
+        inspect_and_save_obs(obs_dict)
+        result = policy.predict_action(obs_dict)
+        pred_action = result['action'][0].detach().cpu().numpy()
+        pred_actions.append(pred_action)
+        
+    for t, action_seq in enumerate(pred_actions):
+        for j, action in enumerate(action_seq):
+            # 展平
+            action_flat = action.flatten()
+            
+            # 弧度 -> 角度
+            # action_deg = action_flat * (180.0 / np.pi)
+            
+            # 格式化打印
+            action_str = ", ".join([f"{x:.4f}" for x in action_flat])
+            print(f"Step {t + n_obs_steps + j}: [{action_str}]")
+
+# 打印obs内部结构范围
+def print_obs_dict(obs_dict, name="obs"):
+    def _print(x, key):
+        # 嵌套 dict
+        if isinstance(x, dict):
+            print(f"{key}: (dict)")
+            for k, v in x.items():
+                _print(v, f"{key}.{k}")
+
+        # torch tensor
+        elif torch.is_tensor(x):
+            x_detach = x.detach()
+            print(f"{key}: shape={tuple(x.shape)}, dtype={x.dtype}, device={x.device}")
+            print(f"  min={x_detach.min().item():.4f}, max={x_detach.max().item():.4f}, mean={x_detach.mean().item():.4f}")
+
+        # numpy
+        elif isinstance(x, np.ndarray):
+            print(f"{key}: shape={x.shape}, dtype={x.dtype}")
+            print(f"  min={x.min():.4f}, max={x.max():.4f}, mean={x.mean():.4f}")
+
+        else:
+            print(f"{key}: {type(x)}")
+
+    print(f"\n===== {name} STRUCTURE =====")
+    _print(obs_dict, name)
+
+# 打印state,保存图片
+def inspect_and_save_obs(obs_dict, save_dir="compare_eval"):
+    os.makedirs(save_dir, exist_ok=True)
+
+    # ===== 自动计数器 =====
+    if not hasattr(inspect_and_save_obs, "counter"):
+        inspect_and_save_obs.counter = 0
+
+    idx = inspect_and_save_obs.counter
+    inspect_and_save_obs.counter += 1
+
+    # -------- 1. 打印关节信息 --------
+    qpos = obs_dict["robot0_qpos"].detach().cpu().numpy().squeeze()
+    gripper = obs_dict["robot0_gripper_qpos"].detach().cpu().numpy().squeeze()
+
+    print("\n===== ROBOT STATE =====")
+    print("robot0_qpos:", qpos)
+    print("robot0_gripper_qpos:", gripper)
+
+    # -------- 2. 处理图像 --------
+    img = obs_dict["agentview_head_image"]
+
+    if torch.is_tensor(img):
+        img = img.detach().cpu().numpy()
+
+    img = img.squeeze()  # (3, H, W)
+
+    if img.shape[0] == 3:
+        img = np.transpose(img, (1, 2, 0))  # -> HWC
+
+    if img.max() <= 1.0:
+        img = (img * 255).astype(np.uint8)
+    else:
+        img = img.astype(np.uint8)
+
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    # -------- 3. 保存 --------
+    save_path = os.path.join(save_dir, f"obs_{idx:05d}.png")
+    cv2.imwrite(save_path, img)
+
+    print(f"image saved to: {save_path}")
 
 if __name__ == "__main__":
     main()

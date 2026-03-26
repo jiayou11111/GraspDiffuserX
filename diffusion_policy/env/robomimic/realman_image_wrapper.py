@@ -3,9 +3,10 @@ import numpy as np
 import gym
 from gym import spaces
 
-from configs.LinkerHandGrasp_config import LinkGraspCfg
-from env.TaskRobotEnv import RealmanGraspSingleGym
-
+# from configs.LinkerHandGrasp_config import LinkGraspCfg
+# from env.TaskRobotEnv import RealmanGraspSingleGym
+from RL_agent_1.env.TaskRobotEnv import RealmanGraspSingleGym
+from RL_agent_1.configs.RealmanGrasp_config import RealGraspCfg
 import torch
 
 import os
@@ -66,7 +67,7 @@ class RealManImageWrapper(gym.Env):
 
         if isinstance(action, np.ndarray):
             action = torch.from_numpy(action).float().to(self.env.device)
-
+        # print("仿真输入action:", action)
         raw_obs, privileged_obs, reward, done, info = self.env.step(action)
 
         obs = self.get_raw_observation(raw_obs)
@@ -125,39 +126,11 @@ class RealManImageWrapper(gym.Env):
 
         wrist_flat = raw_obs[:, :img_dim]
         head_flat = raw_obs[:, img_dim:2*img_dim]
+
         state_obs = raw_obs[:, 2*img_dim:]
 
         wrist_img = wrist_flat.view(n_envs, 3, H, W)
-        # if self.flag == 0:
-        #     wrist_np = wrist_img.detach().cpu().numpy()
-
-        #     # 保存
-        #     np.save("data/wrist_img.npy", wrist_np)
-
-        #     print("Saved to data/wrist_img.npy")
-        #     print("Shape:", wrist_np.shape)
-        #     self.flag = 1
-
         head_img = head_flat.view(n_envs, 3, H, W)
-
-        # # --- Align Sim Images to Real Data Statistics ---
-        
-        # # AgentView Image Stats (applied to wrist_img because it is mapped to agentview_image key)
-        # # Mean: [0.4705, 0.4749, 0.4760] | Std: [0.0854, 0.0808, 0.0789]
-        # wrist_img = self.align_sim_to_real(
-        #     wrist_img, 
-        #     real_mean=[0.4705401, 0.4749347, 0.47601163],
-        #     real_std=[0.08544321, 0.08081585, 0.07889712]
-        # )
-
-        # # AgentView Head Image Stats
-        # # Mean: [0.4682, 0.4698, 0.4682] | Std: [0.0861, 0.0867, 0.0887]
-        # head_img = self.align_sim_to_real(
-        #     head_img, 
-        #     real_mean=[0.4682231, 0.46976656, 0.46816772],
-        #     real_std=[0.08610459, 0.08672088, 0.08871145]
-        # )
-        # # ------------------------------------------------
 
         robot0_qpos = state_obs[:, :7]
         robot0_gripper_qpos = state_obs[:, 7:8]
@@ -182,6 +155,58 @@ class RealManImageWrapper(gym.Env):
             obs_dict[k] = obs_dict[k].cpu().numpy().astype("float32")
 
         return obs_dict
+        # if self.flag == 0:
+        #     wrist_np = wrist_img.detach().cpu().numpy()
+
+        #     # 保存
+        #     np.save("data/wrist_img.npy", wrist_np)
+
+        #     print("Saved to data/wrist_img.npy")
+        #     print("Shape:", wrist_np.shape)
+        #     self.flag = 1
+
+        # # --- Align Sim Images to Real Data Statistics ---
+        
+        # # AgentView Image Stats (applied to wrist_img because it is mapped to agentview_image key)
+        # # Mean: [0.4705, 0.4749, 0.4760] | Std: [0.0854, 0.0808, 0.0789]
+        # wrist_img = self.align_sim_to_real(
+        #     wrist_img, 
+        #     real_mean=[0.4705401, 0.4749347, 0.47601163],
+        #     real_std=[0.08544321, 0.08081585, 0.07889712]
+        # )
+
+        # # AgentView Head Image Stats
+        # # Mean: [0.4682, 0.4698, 0.4682] | Std: [0.0861, 0.0867, 0.0887]
+        # head_img = self.align_sim_to_real(
+        #     head_img, 
+        #     real_mean=[0.4682231, 0.46976656, 0.46816772],
+        #     real_std=[0.08610459, 0.08672088, 0.08871145]
+        # )
+        # # ------------------------------------------------
+
+        # robot0_qpos = state_obs[:, :7]
+        # robot0_gripper_qpos = state_obs[:, 7:8]
+        # robot_ee_pos = state_obs[:, 8:11]
+        # robot_ee_orn = state_obs[:, 11:15]
+
+        # obs_dict = {
+        #     "agentview_image": wrist_img,
+        #     "agentview_head_image": head_img,
+        #     "robot0_qpos": robot0_qpos,
+        #     "robot0_gripper_qpos": robot0_gripper_qpos,
+        #     "robot_ee_pos": robot_ee_pos,
+        #     "robot_ee_orn": robot_ee_orn,
+        # }
+
+        # # 筛选 key
+        # if keys_to_return is not None:
+        #     obs_dict = {k: obs_dict[k] for k in keys_to_return if k in obs_dict}
+
+        # # 转 numpy（给 diffusion policy）
+        # for k in obs_dict:
+        #     obs_dict[k] = obs_dict[k].cpu().numpy().astype("float32")
+
+        # return obs_dict
 
 
     def render(self, mode='rgb_array'):

@@ -10,12 +10,13 @@ import time
 # Add NexusMinds_RL to path to find env and configs
 sys.path.append(os.path.join(os.getcwd(), "NexusMinds_RL"))
 
-from env.TaskRobotEnv import RealmanGraspSingleGym
-from configs.LinkerHandGrasp_config import LinkGraspCfg
+from RL_agent_1.env.TaskRobotEnv import RealmanGraspSingleGym
+# from RL_agent_1.configs.LinkerHandGrasp_config import LinkGraspCfg
+from RL_agent_1.configs.RealmanGrasp_config import RealGraspCfg
 from diffusion_policy.env.robomimic.realman_image_wrapper import RealManImageWrapper
 
 def replay_dataset():
-    dataset_path = "data/robomimic/datasets/lift/mh/pink_weita_delete0data_initdofchange_camerachange_BGR_240320.hdf5"
+    dataset_path = "data/robomimic/datasets/lift/mh/dataset.hdf5"
     
     if not os.path.exists(dataset_path):
         print(f"Dataset not found: {dataset_path}")
@@ -34,7 +35,7 @@ def replay_dataset():
 
     # Initialize Environment
     print("Initializing Environment...")
-    cfg = LinkGraspCfg()
+    cfg = RealGraspCfg()
     
     # Force number of environments to 1 for replay
     cfg.all.num_envs = 1

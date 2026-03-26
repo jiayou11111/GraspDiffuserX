@@ -114,17 +114,11 @@ class MultiStepWrapper(gym.Wrapper):
         current_step_rewards = [[] for _ in range(self.n_envs)]
         last_privileged_obs = None
         last_info = {}
-
+        # print("action shape ", action.shape)
         for t in range(self.n_action_steps):
 
             # 取每个 env 当前时间步动作
-            # act = action[:, t]  # (n_envs, action_dim)
-
-            steps_to_run = min(self.n_action_steps, 1)
-
-            for t in range(steps_to_run):
-
-                act = action[:, t]  # (n_envs, action_dim)
+            act = action[:, t]  # (n_envs, action_dim)
 
             # 已完成 env 不执行
             # act[self.done] = 0.0 # Disabled: Let the env handle logic or auto-reset
@@ -151,7 +145,6 @@ class MultiStepWrapper(gym.Wrapper):
 
                 if done[i]:
                     self.done[i] = True
-
         observation = self._get_obs()
 
         # Aggregate rewards for THIS step call only

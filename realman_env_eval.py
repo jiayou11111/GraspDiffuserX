@@ -6,8 +6,9 @@ import hydra
 import tqdm
 import numpy as np
 
-from env.TaskRobotEnv import RealmanGraspSingleGym
-from configs.LinkerHandGrasp_config import LinkGraspCfg
+from RL_agent_1.env.TaskRobotEnv import RealmanGraspSingleGym
+from RL_agent_1.configs.RealmanGrasp_config import RealGraspCfg
+
 from diffusion_policy.env.robomimic.realman_image_wrapper import RealManImageWrapper
 from diffusion_policy.env_runner.realman_image_runner import RealmanImageRunner
 
@@ -41,7 +42,7 @@ def main(checkpoint, device='cuda:0'):
 
 
     shape_meta = cfg.task.shape_meta
-    cfg1 = LinkGraspCfg()
+    cfg1 = RealGraspCfg()
     base_env = RealmanGraspSingleGym(cfg1)
     env = RealManImageWrapper(base_env, shape_meta)
 
@@ -61,6 +62,6 @@ if __name__ == "__main__":
     sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
     #在此处直接修改路径
-    checkpoint_path = "data/outputs/epoch=2100-val_loss=0.268.ckpt"
+    checkpoint_path = "data/outputs/epoch=0200-val_loss=0.055.ckpt"
     
     main(checkpoint_path)
