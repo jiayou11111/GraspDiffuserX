@@ -17,13 +17,10 @@ class RealmanImageRunner(BaseImageRunner):
         self,
         output_dir,
         env,
-        env_seeds=None,
-        env_prefixs=None,
-        max_steps=400,
+        max_steps=1000,
         n_obs_steps=1,
         n_action_steps=8,
-        past_action=False,
-        tqdm_interval_sec=5.0,
+
     ):
         super().__init__(output_dir)
 
@@ -37,13 +34,9 @@ class RealmanImageRunner(BaseImageRunner):
         self.max_steps = max_steps
         self.n_obs_steps = n_obs_steps
         self.n_action_steps = n_action_steps
-        self.past_action = past_action
-        self.tqdm_interval_sec = tqdm_interval_sec
 
-        self.env_seeds = env_seeds
-        self.env_prefixs = env_prefixs
 
-    def run(self, policy: BaseImagePolicy):
+    def run(self, policy: BaseImagePolicy) -> dict:
 
         device = policy.device
         env = self.env
@@ -53,40 +46,32 @@ class RealmanImageRunner(BaseImageRunner):
         obs = env.reset()
         policy.reset()
 
-        # past_action = None
-        # done = np.zeros(n_envs, dtype=bool)
-
-        # 用 numpy array 更高效
-        # max_rewards = np.zeros(n_envs)
-
-        pbar = tqdm.tqdm(
-            total=self.max_steps,
-            desc="Realman Eval",
-            leave=False,
-            mininterval=self.tqdm_interval_sec
-        )
-
         step_count = 0
+
+        results = {}
+
+        # ===== 新增：评估指标统计记录 =====
+        total_episodes = 0
+        total_successes = 0
+        # 记录并行环境中，每个环境在当前回合内是否触发过成功 (reward == 1)
+        env_has_succeeded = np.zeros(n_envs, dtype=bool)
+
 
         while step_count < self.max_steps:
 
             np_obs_dict = dict(obs)
 
-            if self.past_action and (past_action is not None):
-                np_obs_dict['past_action'] = past_action[
-                    :, -(self.n_obs_steps-1):
-                ].astype(np.float32)
-
             obs_dict = dict_apply(
                 np_obs_dict,
                 lambda x: torch.from_numpy(x).to(device=device)
             )
+
+            # 检查输入obs
             # print_obs_dict(obs_dict, "TORCH_OBS")
             # inspect_and_save_obs(obs_dict)
 
             with torch.no_grad():
                 action_dict = policy.predict_action(obs_dict)
-                # print("finished policy.predict_action")
 
             np_action_dict = dict_apply(
                 action_dict,
@@ -94,34 +79,46 @@ class RealmanImageRunner(BaseImageRunner):
             )
 
             action = np_action_dict['action']
-            print("action:", action)
+            print("action:", action.shape)
 
             if not np.all(np.isfinite(action)):
                 raise RuntimeError("Nan or Inf action")
-
+            
             obs, privileged_obs, reward, done_step, info = env.step(action)
 
-            # done = np.logical_or(done, done_step)
-            # max_rewards = np.maximum(max_rewards, reward)
-            # past_action = action
+            for i in range(n_envs):
+
+                if reward[i] >= 0.99:  # 为了防止浮点精度问题，可以用 >= 0.99
+                    env_has_succeeded[i] = True
+                
+                if done_step[i]:
+                    total_episodes += 1
+                    if env_has_succeeded[i]:
+                        total_successes += 1
+                    
+                    # 记得清空该环境成功标志，准备下一回合
+                    env_has_succeeded[i] = False
 
             step_count += self.n_action_steps
-            pbar.update(self.n_action_steps)
+    
+        # ===== 循环结束：打印并在结果中返回 =====
+        success_rate = total_successes / total_episodes if total_episodes > 0 else 0.0
+        print("\n================ EVALUATION SUMMARY ================")
+        print(f"Total Steps run: {step_count}")
+        print(f"Total Episodes completed: {total_episodes}")
+        print(f"Total Successes: {total_successes}")
+        print(f"Success Rate: {success_rate*100:.2f}%")
+        print("====================================================\n")
 
-        pbar.close()
+        results['success_rate'] = success_rate
+        results['total_episodes'] = total_episodes
+        results['total_successes'] = total_successes
+        
+        return results
 
-        # ---------- 统计 ----------
-        log_data = {}
 
-        # for i in range(n_envs):
-        #     prefix = self.env_prefixs[i] if self.env_prefixs else ""
-        #     log_data[prefix + f"sim_max_reward_{i}"] = max_rewards[i]
 
-        # # mean score
-        # mean_score = np.mean(max_rewards)
-        # log_data["mean_score"] = mean_score
 
-        return log_data
 
 # 打印obs内部结构范围
 def print_obs_dict(obs_dict, name="obs"):

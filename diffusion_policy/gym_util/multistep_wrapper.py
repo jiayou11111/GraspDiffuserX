@@ -88,8 +88,10 @@ class MultiStepWrapper(gym.Wrapper):
 
         # 每个 env 单独 buffer
         self.obs = [deque(maxlen=n_obs_steps+1) for _ in range(self.n_envs)]
-        self.reward = [[] for _ in range(self.n_envs)]
-        self.done = [False for _ in range(self.n_envs)]
+        # self.reward = [[] for _ in range(self.n_envs)]
+        self.reward = [deque(maxlen=self.n_action_steps) for _ in range(self.n_envs)]
+        # self.done = [False for _ in range(self.n_envs)]
+        self.done = [deque(maxlen=self.n_action_steps) for _ in range(self.n_envs)]
         self.step_count = np.zeros(self.n_envs, dtype=int)
 
     def reset(self, **kwargs):
@@ -98,8 +100,8 @@ class MultiStepWrapper(gym.Wrapper):
         for i in range(self.n_envs):
             self.obs[i].clear()
             self.obs[i].append(self._slice_obs(obs, i))
-            self.reward[i] = []
-            self.done[i] = False
+            self.reward[i].clear() 
+            self.done[i].clear()
             self.step_count[i] = 0
 
         return self._get_obs()
@@ -112,39 +114,70 @@ class MultiStepWrapper(gym.Wrapper):
             action = action.detach().cpu().numpy()
 
         current_step_rewards = [[] for _ in range(self.n_envs)]
+        current_step_dones = [[] for _ in range(self.n_envs)]
         last_privileged_obs = None
         last_info = {}
-        # print("action shape ", action.shape)
+        self.n_action_steps = 4
+        # 阈值判断机械臂是否到位
+        epsilon_qpos = 0.01
+        epsilon_gripper = 0.01
         for t in range(self.n_action_steps):
 
             # 取每个 env 当前时间步动作
             act = action[:, t]  # (n_envs, action_dim)
-
-            # 已完成 env 不执行
-            # act[self.done] = 0.0 # Disabled: Let the env handle logic or auto-reset
-            # print("multistep action:", act)
             obs, privileged_obs, reward, done, info = super().step(act)
+
+            # 在这里添加一个阻塞执行的机制，确保每个 env 的 step 都执行完act后再继续下一步
+            # 也就是说obs[robot0_qpos]-act[:7]<0.01,obs[robot0_gripper_qpos]-act[7]<0.01
+            # 所有环境的动作都执行完后再继续下一步，里的act应该是[envs, action_dim]的形式
+
+
+            # 待验证，到底是否需要加个这个
+
+            # # 阻塞循环：等待每个 env 执行动作完成
+            # done_envs = [False] * self.n_envs
+            # max_wait_steps = 500  # 防止死循环
+            # wait_step = 0
+
+            # while not all(done_envs) and wait_step < max_wait_steps:
+            #     # 每个环境的动作
+            #     obs, privileged_obs, reward, done, info = super().step(act)
+
+            #     for i in range(self.n_envs):
+            #         # 关节角 qpos
+            #         robot_qpos = obs[i][:7]  # 假设前7维是关节角
+            #         robot_gripper = obs[i][7]  # 假设第8维是夹爪角
+
+            #         target_qpos = act[i][:7]
+            #         target_gripper = act[i][7]
+
+            #         qpos_done = np.all(np.abs(robot_qpos - target_qpos) < epsilon_qpos)
+            #         gripper_done = np.abs(robot_gripper - target_gripper) < epsilon_gripper
+
+            #         done_envs[i] = qpos_done and gripper_done
+
+            #     wait_step += 1
+
+
+
+
             last_privileged_obs = privileged_obs
             last_info = info
 
-            for i in range(self.n_envs):
 
-                # if self.done[i]:
-                #     continue
-                # Removed check: Record data even if done (handling auto-reset in vector envs)
+            for i in range(self.n_envs):
 
                 self.obs[i].append(self._slice_obs(obs, i))
                 self.reward[i].append(reward[i]) # Keep history
+                self.done[i].append(done[i])  
                 current_step_rewards[i].append(reward[i]) # Current step accumulator
+                current_step_dones[i].append(done[i])
+
                 self.step_count[i] += 1
+                
+            # if any([d for env_done in current_step_dones for d in env_done]):
+            #     break
 
-                # 超时
-                if (self.max_episode_steps is not None) and \
-                   (self.step_count[i] >= self.max_episode_steps):
-                    done[i] = True
-
-                if done[i]:
-                    self.done[i] = True
         observation = self._get_obs()
 
         # Aggregate rewards for THIS step call only
@@ -163,12 +196,20 @@ class MultiStepWrapper(gym.Wrapper):
                 else:
                     raise NotImplementedError
         
+        dones_aggregated = []
+        for i in range(self.n_envs):
+            d_list = current_step_dones[i]
+            # 把 GPU tensor 转为 CPU NumPy
+            d_list_cpu = [d.cpu().item() if torch.is_tensor(d) else bool(d) for d in d_list]
+            dones_aggregated.append(any(d_list_cpu))
+
         reward = np.array(rewards)
-        done = np.array(self.done)
+        done_out = np.array(dones_aggregated)
+
 
         info = last_info
 
-        return observation, last_privileged_obs, reward, done, info
+        return observation, last_privileged_obs, reward, done_out, info
 
     def _slice_obs(self, obs, idx):
         if isinstance(obs, dict):

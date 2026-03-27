@@ -62,6 +62,6 @@ if __name__ == "__main__":
     sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
     #在此处直接修改路径
-    checkpoint_path = "data/outputs/epoch=0200-val_loss=0.055.ckpt"
+    checkpoint_path = "data/outputs/epoch=0100-val_loss=0.049.ckpt"
     
     main(checkpoint_path)

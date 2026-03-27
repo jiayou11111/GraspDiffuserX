@@ -187,7 +187,7 @@ class AllCfg:
         self.num_desired_goal = 3
         self.max_episode_length = 300
         self.max_episode_length_s = 4.0  # 秒数形式（用于日志统计）
-        self.decimation = 25
+        self.decimation = 4
         self.control_type_sim = global_cfg.control_type
         self.obs_type_sim = global_cfg.obs_type
         self.robot_type_sim = global_cfg.robot_type

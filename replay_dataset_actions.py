@@ -16,7 +16,7 @@ from RL_agent_1.configs.RealmanGrasp_config import RealGraspCfg
 from diffusion_policy.env.robomimic.realman_image_wrapper import RealManImageWrapper
 
 def replay_dataset():
-    dataset_path = "data/robomimic/datasets/lift/mh/dataset.hdf5"
+    dataset_path = "data/robomimic/datasets/lift/mh/dataset(5).hdf5"
     
     if not os.path.exists(dataset_path):
         print(f"Dataset not found: {dataset_path}")
